@@ -77,8 +77,8 @@ if scan_points < 2
     error('doJV:InvalidInput', 'scan_points must be >= 2.');
 end
 
-calcJ = pickOptional(opt, 1, getfieldWithDefault(p, 'calcJ', 4)); %#ok<GFLD>
-BC = pickOptional(opt, 2, getfieldWithDefault(p, 'BC', 3)); %#ok<GFLD>
+calcJ = pickOptional(opt, 1, getfieldWithDefault(p, 'calcJ', 4));
+BC = pickOptional(opt, 2, getfieldWithDefault(p, 'BC', 3));
 
 % Configure JV scan parameters
 p.figson = 0;

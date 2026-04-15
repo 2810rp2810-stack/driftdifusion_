@@ -41,7 +41,7 @@ sol = JVsol.sol;
 
 n = squeeze(sol(:, :, 1));
 h = squeeze(sol(:, :, 2));
-a = squeeze(sol(:, :, 3));
+ions = squeeze(sol(:, :, 3));
 phi = squeeze(sol(:, :, 4));
 
 % --- 1) JV + PV metrics
@@ -63,13 +63,13 @@ carrier.n_Voc = n(idxVoc, :)';
 carrier.p_Voc = h(idxVoc, :)';
 
 % --- 3) derived charge/capacitance for C-V and EIS model
-rho = h - n + a - getfieldWithDefault(p, 'NI', 0); %#ok<GFLD>
+charge_density = h - n + ions - getfieldWithDefault(p, 'NI', 0);
 if isfield(p, 'e')
     qC = p.e;
 else
     qC = 1.602176634e-19;
 end
-Q = qC * trapz(x, rho, 2); % [C cm^-2]
+Q = qC * trapz(x, charge_density, 2); % [C cm^-2]
 C = gradient(Q, Vapp);      % [F cm^-2]
 
 % --- 4) electric field profile
@@ -77,11 +77,10 @@ E_SC = -gradient(phi(idxSC, :), x);
 E_Voc = -gradient(phi(idxVoc, :), x);
 
 % --- 5) band diagram at Voc
-if isfield(p, 'EA') && isfield(p, 'IP')
-    Ecb = p.EA - phi(idxVoc, :) - p.EA;
+Ecb = -phi(idxVoc, :);
+if isfield(p, 'IP') && isfield(p, 'EA')
     Evb = p.IP - phi(idxVoc, :) - p.EA;
 else
-    Ecb = -phi(idxVoc, :);
     Evb = Ecb - 1.55;
 end
 if isfield(p, 'Ei') && isfield(p, 'kB') && isfield(p, 'T') && isfield(p, 'q') && isfield(p, 'ni')
@@ -163,9 +162,9 @@ results.CF = cf;
 results.operatingPoints = struct('idxSC', idxSC, 'idxVoc', idxVoc, 'tSC', t(idxSC), 'tVoc', t(idxVoc));
 
 results.report = sprintf(['Comprehensive device characterization complete.\n' ...
-    'Jsc = %.3f mA/cm^2\nVoc = %.3f V\nFF = %.2f %%\nPCE = %.2f %%\n' ...
+    'Jsc = %.3f mA cm^{-2}\nVoc = %.3f V\nFF = %.2f %%\nPCE = %.2f %%\n' ...
     'Vbi (Mott-Schottky) = %.3f V\nNA = %.3e cm^-3\n' ...
-    'Rs = %.3e Ohm*cm^2\nRrec = %.3e Ohm*cm^2\nCgeo = %.3e F/cm^2\nRion = %.3e Ohm*cm^2\nCion = %.3e F/cm^2\n' ...
+    'Rs = %.3e ohm cm^2\nRrec = %.3e ohm cm^2\nCgeo = %.3e F cm^{-2}\nRion = %.3e ohm cm^2\nCion = %.3e F cm^{-2}\n' ...
     'f_geo = %.3e Hz\nf_ion = %.3e Hz\nWdep = %.3e cm\n'], ...
     pv.Jsc, pv.Voc, 100*pv.FF, pv.PCE, ms.Vbi, ms.NA, eis.Rs, eis.Rrec, eis.Cgeo, eis.Rion, eis.Cion, eis.f_geo, eis.f_ion, ms.Wdep);
 
@@ -223,8 +222,10 @@ if numel(Vv) < 3
     Vline = V(:);
     Yline = NaN(size(Vline));
 else
+    % Fit central sweep region (30%-80%) where Mott-Schottky response is
+    % generally closest to linear and edge transients are reduced.
     i1 = max(1, floor(0.3*numel(Vv)));
-    i2 = max(i1+1, ceil(0.8*numel(Vv)));
+    i2 = max(i1+2, ceil(0.8*numel(Vv))); % keep >=3 points for stable fit
     coeff = polyfit(Vv(i1:i2), Yv(i1:i2), 1);
     slope = coeff(1);
     Vbi = -coeff(2)/max(coeff(1), eps);
@@ -232,8 +233,8 @@ else
     Yline = polyval(coeff, Vline);
 end
 
-q = getfieldWithDefault(p, 'e', 1.602176634e-19); %#ok<GFLD>
-epsRel = getfieldWithDefault(p, 'eppi', 20); %#ok<GFLD>
+q = getfieldWithDefault(p, 'e', 1.602176634e-19);
+epsRel = getfieldWithDefault(p, 'eppi', 20);
 eps0 = 8.854187817e-14; % F/cm
 epsAbs = epsRel * eps0;
 NA = 2 ./ max(q * epsAbs * abs(slope), eps);
@@ -241,7 +242,10 @@ NA = 2 ./ max(q * epsAbs * abs(slope), eps);
 if isnan(Vbi)
     Wdep = NaN;
 else
-    Vref = min(max(Vbi - median(V), 1e-6), 5);
+    % Clamp to avoid singular values and cap unrealistically large Vbi used
+    % in this compact extraction model (typical perovskite Vbi << 5 V).
+    maxVbiModel = 5;
+    Vref = min(max(Vbi, 1e-6), maxVbiModel);
     Wdep = sqrt(2 * epsAbs * Vref / max(q * NA, eps));
 end
 
@@ -271,7 +275,10 @@ else
 end
 
 Rion = max(Rrec - Rs, Rs);
-Cion = max(5 * Cgeo, 1e-9);
+% Empirical ionic branch scaling: ionic capacitance is commonly larger than
+% geometric capacitance; 5x is a pragmatic default for synthetic spectra.
+minCion = 1e-9; % keeps RC model finite when C extraction is near-zero/noisy
+Cion = max(5 * Cgeo, minCion);
 
 f_geo = 1/(2*pi*Rrec*Cgeo);
 f_ion = 1/(2*pi*Rion*Cion);
